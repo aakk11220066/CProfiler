@@ -1,15 +1,14 @@
-//#include <iostream>
 #include <stdio.h>
 #include <string.h>
-//#include <map>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/ptrace.h>
 #include <sys/user.h>
-//#include <exception>
 #include <stdlib.h>
 #include <errno.h>
+#include <stdbool.h>
+#include <assert.h>
 
 void myExit(int retVal){
     //perror("ptrace");
@@ -17,25 +16,57 @@ void myExit(int retVal){
 }
 
 #define C_TRYCATCH(syscall) if ((syscall) < 0) myExit(1)
-#define C_CATCHERR(retVal) if (retVal < 0) myExit(1)
+#define C_CATCHERRNULL(retVal) if (!(retVal)) myExit(1)
+#define C_CATCHERR(retVal) if ((retVal) < 0) myExit(1)
 
 #define DEFAULT_ERRNO 0
 #define MAX_VAR_NAME_LENGTH 256
 #define MAX_REG_NAME_LENGTH 3
+#define WORD_PROFILE_LENGTH 7
 
 typedef unsigned long long int registerContent;
 
-struct StringStringMap; //must be destroyed with destroyStringStringMap
-struct StringStringPair; //must be created with createStringStringPair
+struct StringStringMap;
+struct StringStringMap create_StringStringMap();
+//note: does not free target from heap
+void destroy_StringStringMap(struct StringStringMap* target);
+struct StringStringPair* at_StringStringMap(
+        const struct StringStringMap* map,
+        const char* key);
+void insert_StringStringMap(
+        struct StringStringMap* map,
+        const struct StringStringPair* mapping);
+void erase_StringStringMap(
+        struct StringStringMap* map,
+        const char* key);
 //NOTE: map is a pointer
 #define StringStringMapFOREACH(item, map) \
-    for(const struct StringStringPair* item = (map)->mappings; item != NULL; item = item->_next)
+    for(struct StringStringPair* item = (map)->mappings; item != NULL; item = item->_next)
 
-struct StringRegistercontentMap; //must be destroyed with destroyStringRegistercontentMap
-struct StringRegistercontentPair; //must be created with createStringRegistercontentPair
+struct StringStringPair;
+struct StringStringPair create_StringStringPair(const char* key, const char* data);
+void destroy_StringStringPair(struct StringStringPair* target);
+
+struct StringRegistercontentMap;
+struct StringRegistercontentMap create_StringRegistercontentMap();
+//note: does not free target from heap
+void destroy_StringRegistercontentMap(struct StringRegistercontentMap* target);
+struct StringRegistercontentPair* at_StringRegistercontentMap(
+        const struct StringRegistercontentMap* map, 
+        const char* key);
+void insert_StringRegistercontentMap(
+        struct StringRegistercontentMap* map,
+        const struct StringRegistercontentPair* mapping);
+void erase_StringRegistercontentMap(
+        struct StringRegistercontentMap* map,
+        const char* key);
 //NOTE: map is a pointer
 #define StringRegistercontentMapFOREACH(item, map) \
-    for(const struct StringRegistercontentPair* item = (map)->mappings; item != NULL; item = item->_next)
+    for(struct StringRegistercontentPair* item = map->mappings; item; item = item->_next)
+
+struct StringRegistercontentPair;
+struct StringRegistercontentPair create_StringRegistercontentPair(const char* key, const registerContent data);
+void destroy_StringRegistercontentPair(struct StringRegistercontentPair* target);
 
 //get input from user, return a mapping of (variable name, r name)
 struct StringStringMap getRegisterMap();
@@ -64,7 +95,7 @@ void stepPastBreakpoint(void* breakpointAddress, unsigned char replacedByte, pid
 void loadDebuggedProgram(char* programArgs[]);
 
 //Returns the value of a requested register (given by register name) from a user_regs_struct
-registerContent getVarValueFromUser_regs_struct(const struct user_regs_struct& regs, const char* requestedRegister);
+registerContent getVarValueFromUser_regs_struct(const struct user_regs_struct* regs, const char* requestedRegister);
 
 //returns values of variables in (currently paused) debugged program
 struct StringRegistercontentMap storeVariables(const struct StringStringMap* variableMap, pid_t debuggee);
@@ -87,33 +118,153 @@ void runDebugger(char *programArgs[], void *beginAddress, void *endAddress,
 
 //-------------------------C implementations for C++ structures-----------------------
 struct StringStringPair{ //this is a linked list
-    char* first = NULL; //key
-    char* second = NULL; //value
+    const char* first;
+    const char* second;
 
     //private
-    struct StringStringPair* _next = NULL;
+    struct StringStringPair* _next;
 };
+struct StringStringPair create_StringStringPair(const char* key, const char* data){
+    assert(key && data);
+    struct StringStringPair result = {
+            (const char*)malloc(sizeof(char)*(MAX_VAR_NAME_LENGTH+1)),
+            (const char*)malloc(sizeof(char)*(WORD_PROFILE_LENGTH+1)),
+            NULL};
+    C_CATCHERRNULL(result.first);
+    C_CATCHERRNULL(result.second);
+    strcpy(((char*)(result.first)), key);
+    strcpy(((char*)(result.second)), data);
+    return result;
+}
+void destroy_StringStringPair(struct StringStringPair* target){
+    if (!target) return;
+    free((char*)(target->first));
+    free((char*)(target->second));
+    free(target);
+}
 
 struct StringRegistercontentPair{ //this is a linked list
-    char* first = NULL; //key
+    const char* first; //key
     registerContent second; //second
 
     //private
-    struct StringRegistercontentPair* _next = NULL;
+    struct StringRegistercontentPair* _next;
 };
+struct StringRegistercontentPair create_StringRegistercontentPair(const char* key, const registerContent data){
+    assert(key);
+    struct StringRegistercontentPair result = {
+            (const char*)malloc(sizeof(char)*(MAX_VAR_NAME_LENGTH+1)),
+            data,
+            NULL};
+    C_CATCHERRNULL(result.first);
+    strcpy(((char*)(result.first)), key);
+    return result;
+}
+void destroy_StringRegistercontentPair(struct StringRegistercontentPair* target){
+    if (!target) return;
+    free((char*)(target->first));
+    free(target);
+}
+
+#define MAP_CREATE(MAP_TYPE) do { \
+    struct MAP_TYPE result = {NULL}; \
+    return result; \
+} while (false)
+#define MAP_DESTROY(PAIR_TYPE, PAIR_DESTROY, target) do{ \
+    struct PAIR_TYPE* nextPair = NULL; \
+    for (struct PAIR_TYPE* targetPair = target->mappings; targetPair; targetPair = nextPair){ \
+        nextPair = targetPair->_next; \
+        PAIR_DESTROY (targetPair); \
+    } \
+} while (false)
+#define MAP_AT(FOREACH, map, key) do{ \
+    FOREACH(current, map){ \
+        if (!strcmp(current->first, key)) return current; \
+    } \
+    assert(false); \
+} while (false)
+#define MAP_INSERT(PAIR_TYPE, map, mapping) do { \
+    struct PAIR_TYPE* newPair = (struct PAIR_TYPE*) malloc(sizeof(*newPair)); \
+    C_CATCHERRNULL(newPair); \
+    \
+    *newPair = *mapping; \
+    newPair->_next = map->mappings; \
+    map->mappings = newPair; \
+} while (false)
+#define LINKED_LIST_ERASE(PREV_NEXT_FIELD, PAIR_TYPE, PAIR_DESTROY) do{ \
+    struct PAIR_TYPE* grandson = PREV_NEXT_FIELD->_next; \
+    PAIR_DESTROY (PREV_NEXT_FIELD); \
+    PREV_NEXT_FIELD = grandson; \
+} while (false)
+#define MAP_ERASE(FOREACH, PAIR_TYPE, PAIR_DESTROY, map, key) do{ \
+    if (map->mappings && !strcmp(map->mappings->first, key)){ \
+        LINKED_LIST_ERASE(map->mappings, PAIR_TYPE, PAIR_DESTROY); \
+    } \
+    FOREACH(prevPair, map){ \
+        if (prevPair->_next && !strcmp(prevPair->_next->first, key)){ \
+            LINKED_LIST_ERASE(prevPair, PAIR_TYPE, PAIR_DESTROY); \
+        } \
+    } \
+} while (false)
 
 struct StringStringMap{
-    struct StringStringPair* mappings = NULL;
+    struct StringStringPair* mappings;
 };
+struct StringStringMap create_StringStringMap(){
+    MAP_CREATE(StringStringMap);
+}
+//note: does not free target from heap
+void destroy_StringStringMap(struct StringStringMap* target){
+    MAP_DESTROY(StringStringPair, destroy_StringStringPair, target);
+}
+struct StringStringPair* at_StringStringMap(
+        const struct StringStringMap* map,
+        const char* key){
+
+    MAP_AT(StringStringMapFOREACH, map, key);
+}
+void insert_StringStringMap(
+        struct StringStringMap* map,
+        const struct StringStringPair* mapping){
+
+    MAP_INSERT(StringStringPair, map, mapping);
+}
+void erase_StringStringMap(
+        struct StringStringMap* map,
+        const char* key){
+
+    MAP_ERASE(StringStringMapFOREACH, StringStringPair, destroy_StringStringPair, map, key);
+}
 
 struct StringRegistercontentMap{
-    struct StringRegistercontentPair* mappings = NULL;
-    StringRegistercontentPair* at(const struct StringRegistercontentMap* map, const char* key);
-    void insert(
-            const struct StringRegistercontentMap* map,
-            const struct StringRegistercontentPair* mapping);
-    void erase(const struct StringRegistercontentMap* map, const char* key);
+    struct StringRegistercontentPair* mappings;
 };
+struct StringRegistercontentMap create_StringRegistercontentMap(){
+    MAP_CREATE(StringRegistercontentMap);
+}
+//note: does not free target from heap
+void destroy_StringRegistercontentMap(struct StringRegistercontentMap* target){
+    MAP_DESTROY(StringRegistercontentPair, destroy_StringRegistercontentPair, target);
+}
+struct StringRegistercontentPair* at_StringRegistercontentMap(
+        const struct StringRegistercontentMap* map,
+        const char* key){
+
+    MAP_AT(StringRegistercontentMapFOREACH, map, key);
+}
+void insert_StringRegistercontentMap(
+        struct StringRegistercontentMap* map,
+        const struct StringRegistercontentPair* mapping){
+
+    MAP_INSERT(StringRegistercontentPair, map, mapping);
+}
+void erase_StringRegistercontentMap(
+        struct StringRegistercontentMap* map,
+        const char* key){
+    
+    MAP_ERASE(StringRegistercontentMapFOREACH, StringRegistercontentPair, 
+            destroy_StringRegistercontentPair, map, key);
+}
 
 //------------------------------------------PROFILER IMPLEMENTATIONS--------------------------
 int main(int argc, char* argv[]) {
@@ -127,28 +278,30 @@ int main(int argc, char* argv[]) {
     //note: argv is null-terminated
     runDebugger(argv+3, (void *) beginAddress, (void *) endAddress, &variableMap);
 
+    destroy_StringStringMap(&variableMap);
     return 0;
 }
 
 //get input from user, return a mapping of (variable name, r name)
 struct StringStringMap getRegisterMap(){
     char variable[MAX_VAR_NAME_LENGTH+1];
-    char strRegister[MAX_REG_NAME_LENGTH+1];
+    char strRegister[WORD_PROFILE_LENGTH+1];
     struct StringStringMap result;
 
     do{
         scanf("%s", variable);
         scanf("%s", strRegister);
-        result.insert(struct StringStringPair(variable,strRegister));
-    } while (variable.compare("run") && strRegister.compare("profile"));
-    result.erase("run");
+        struct StringStringPair newMapping = create_StringStringPair(variable, strRegister);
+        insert_StringStringMap(&result, &newMapping);
+    } while (strcmp(variable,"run") || strcmp(strRegister,"profile"));
+    erase_StringStringMap(&result, "run"); //alternatively, just erase front
 
     return result;
 }
 
 //tell debuggee to run a single instruction
 void singleStep(pid_t debuggee){
-    C_TRYCATCH(ptrace(PTRACE_SINGLESTEP, debuggee, nullptr, nullptr));
+    C_TRYCATCH(ptrace(PTRACE_SINGLESTEP, debuggee, NULL, NULL));
     int debugeeSinglestepStatus = 0;
     C_TRYCATCH(wait(&debugeeSinglestepStatus)); //wait for debuggee to return from singlestep
 }
@@ -158,7 +311,7 @@ void singleStep(pid_t debuggee){
 unsigned char insertByte(void *targetAddress, pid_t debuggee, unsigned char replacement) {
 
     //get word that will be overwritten
-    unsigned long modifiedWord = ptrace(PTRACE_PEEKTEXT, debuggee, targetAddress, nullptr);
+    unsigned long modifiedWord = ptrace(PTRACE_PEEKTEXT, debuggee, targetAddress, NULL);
     if (errno != DEFAULT_ERRNO) C_CATCHERR(modifiedWord);
     unsigned char replacedByte = (unsigned char) modifiedWord;
 
@@ -191,9 +344,9 @@ void stepPastBreakpoint(void* breakpointAddress, unsigned char replacedByte, pid
 
     //2. backs up rip by one instruction (one byte)
     struct user_regs_struct debuggeeRegisters;
-    C_TRYCATCH(ptrace(PTRACE_GETREGS, debuggee, nullptr, &debuggeeRegisters));
+    C_TRYCATCH(ptrace(PTRACE_GETREGS, debuggee, NULL, &debuggeeRegisters));
     --debuggeeRegisters.rip;
-    C_TRYCATCH(ptrace(PTRACE_SETREGS, debuggee, nullptr, &debuggeeRegisters));
+    C_TRYCATCH(ptrace(PTRACE_SETREGS, debuggee, NULL, &debuggeeRegisters));
 
     //3. runs a single instruction of debuggee
     singleStep(debuggee);
@@ -208,7 +361,7 @@ void stepPastBreakpoint(void* breakpointAddress, unsigned char replacedByte, pid
 void loadDebuggedProgram(char* programArgs[]) {
     //1. places trace on self (with ptrace(PTRACE_TRACEME))
     const pid_t SELF = 0;
-    C_TRYCATCH(ptrace(PTRACE_TRACEME, SELF, nullptr, nullptr));
+    C_TRYCATCH(ptrace(PTRACE_TRACEME, SELF, NULL, NULL));
 
     //2. execute debuggee program
     C_TRYCATCH(execv(programArgs[0], programArgs));
@@ -217,61 +370,64 @@ void loadDebuggedProgram(char* programArgs[]) {
 }
 
 //Returns the value of a requested register (given by register name) from a user_regs_struct
-registerContent getVarValueFromUser_regs_struct(const struct user_regs_struct &regs, const char* requestedRegister) {
+registerContent getVarValueFromUser_regs_struct(const struct user_regs_struct* regs, const char* requestedRegister) {
     //64-bit registers
-    if (!requestedRegister.compare("rax")) return regs.rax;
-    if (!requestedRegister.compare("rbx")) return regs.rbx;
-    if (!requestedRegister.compare("rcx")) return regs.rcx;
-    if (!requestedRegister.compare("rdx")) return regs.rdx;
-    if (!requestedRegister.compare("rsi")) return regs.rsi;
+    if (!strcmp(requestedRegister, "rax")) return regs->rax;
+    if (!strcmp(requestedRegister, "rbx")) return regs->rbx;
+    if (!strcmp(requestedRegister, "rcx")) return regs->rcx;
+    if (!strcmp(requestedRegister, "rdx")) return regs->rdx;
+    if (!strcmp(requestedRegister, "rsi")) return regs->rsi;
 
     //32-bit registers
-    if (!requestedRegister.compare("eax")) return (unsigned long long int)(unsigned int) regs.rax;
-    if (!requestedRegister.compare("ebx")) return (unsigned long long int)(unsigned int) regs.rbx;
-    if (!requestedRegister.compare("ecx")) return (unsigned long long int)(unsigned int) regs.rcx;
-    if (!requestedRegister.compare("edx")) return (unsigned long long int)(unsigned int) regs.rdx;
-    if (!requestedRegister.compare("esi")) return (unsigned long long int)(unsigned int) regs.rsi;
+    if (!strcmp(requestedRegister, "eax")) return (unsigned long long int)(unsigned int) regs->rax;
+    if (!strcmp(requestedRegister, "ebx")) return (unsigned long long int)(unsigned int) regs->rbx;
+    if (!strcmp(requestedRegister, "ecx")) return (unsigned long long int)(unsigned int) regs->rcx;
+    if (!strcmp(requestedRegister, "edx")) return (unsigned long long int)(unsigned int) regs->rdx;
+    if (!strcmp(requestedRegister, "esi")) return (unsigned long long int)(unsigned int) regs->rsi;
 
     //16-bit registers
-    if (!requestedRegister.compare("ax")) return (unsigned long long int)(unsigned short) regs.rax;
-    if (!requestedRegister.compare("bx")) return (unsigned long long int)(unsigned short) regs.rbx;
-    if (!requestedRegister.compare("cx")) return (unsigned long long int)(unsigned short) regs.rcx;
-    if (!requestedRegister.compare("dx")) return (unsigned long long int)(unsigned short) regs.rdx;
-    if (!requestedRegister.compare("si")) return (unsigned long long int)(unsigned short) regs.rsi;
+    if (!strcmp(requestedRegister, "ax")) return (unsigned long long int)(unsigned short) regs->rax;
+    if (!strcmp(requestedRegister, "bx")) return (unsigned long long int)(unsigned short) regs->rbx;
+    if (!strcmp(requestedRegister, "cx")) return (unsigned long long int)(unsigned short) regs->rcx;
+    if (!strcmp(requestedRegister, "dx")) return (unsigned long long int)(unsigned short) regs->rdx;
+    if (!strcmp(requestedRegister, "si")) return (unsigned long long int)(unsigned short) regs->rsi;
 
     //8-bit low registers
-    if (!requestedRegister.compare("al")) return (unsigned long long int)(unsigned char) regs.rax;
-    if (!requestedRegister.compare("bl")) return (unsigned long long int)(unsigned char) regs.rbx;
-    if (!requestedRegister.compare("cl")) return (unsigned long long int)(unsigned char) regs.rcx;
-    if (!requestedRegister.compare("dl")) return (unsigned long long int)(unsigned char) regs.rdx;
-    if (!requestedRegister.compare("sil")) return (unsigned long long int)(unsigned char) regs.rsi;
+    if (!strcmp(requestedRegister, "al")) return (unsigned long long int)(unsigned char) regs->rax;
+    if (!strcmp(requestedRegister, "bl")) return (unsigned long long int)(unsigned char) regs->rbx;
+    if (!strcmp(requestedRegister, "cl")) return (unsigned long long int)(unsigned char) regs->rcx;
+    if (!strcmp(requestedRegister, "dl")) return (unsigned long long int)(unsigned char) regs->rdx;
+    if (!strcmp(requestedRegister, "sil")) return (unsigned long long int)(unsigned char) regs->rsi;
 
     //8-bit high registers
-    if (!requestedRegister.compare("ah")) return
-                ((unsigned long long int)(((unsigned short) regs.rax)) >> 8);
-    if (!requestedRegister.compare("bh")) return
-                ((unsigned long long int)(((unsigned short) regs.rbx)) >> 8);
-    if (!requestedRegister.compare("ch")) return
-                ((unsigned long long int)(((unsigned short) regs.rcx)) >> 8);
-    if (!requestedRegister.compare("dh")) return
-                ((unsigned long long int)(((unsigned short) regs.rdx)) >> 8);
+    if (!strcmp(requestedRegister, "ah")) return
+                ((unsigned long long int)(((unsigned short) regs->rax)) >> 8);
+    if (!strcmp(requestedRegister, "bh")) return
+                ((unsigned long long int)(((unsigned short) regs->rbx)) >> 8);
+    if (!strcmp(requestedRegister, "ch")) return
+                ((unsigned long long int)(((unsigned short) regs->rcx)) >> 8);
+    if (!strcmp(requestedRegister, "dh")) return
+                ((unsigned long long int)(((unsigned short) regs->rdx)) >> 8);
     //not an intel register:
     // if (!requestedRegister.compare("sih")) return
     //      ((unsigned long long int)(((unsigned short) regs.rsi)) >> 8);
 
-    throw ProfilerExceptions::NotARegister();
+    printf("%s is not a register!", requestedRegister);
+    myExit(1);
 }
 
 //returns values of variables in (currently paused) debugged program
 struct StringRegistercontentMap storeVariables(const struct StringStringMap* variableMap, pid_t debuggee){
-    struct StringRegistercontentMap variableValues; //FIXME: possible bug: gets deleted at end of function
+    struct StringRegistercontentMap variableValues = create_StringRegistercontentMap();
 
     struct user_regs_struct debuggeeRegisters;
-    C_TRYCATCH(ptrace(PTRACE_GETREGS, debuggee, nullptr, &debuggeeRegisters));
+    C_TRYCATCH(ptrace(PTRACE_GETREGS, debuggee, NULL, &debuggeeRegisters));
 
-    for (const struct StringStringPair* varToReg_mapping : variableMap){
-        registerContent varValue = getVarValueFromUser_regs_struct(debuggeeRegisters, varToReg_mapping->second);
-        variableValues.insert(struct StringRegistercontentPair(varToReg_mapping.first, varValue));
+    StringStringMapFOREACH(varToReg_mapping, variableMap){
+        registerContent varValue = getVarValueFromUser_regs_struct(&debuggeeRegisters, varToReg_mapping->second);
+        struct StringRegistercontentPair newVariableEntry = 
+                create_StringRegistercontentPair(varToReg_mapping->first, varValue);
+        insert_StringRegistercontentMap(&variableValues, &newVariableEntry);
     }
 
     return variableValues;
@@ -292,16 +448,18 @@ void compareVariables(
     struct StringRegistercontentMap newVariableValues = storeVariables(variableMap, debuggee);
 
     StringRegistercontentMapFOREACH(oldVariable, oldVariableValues){
-        const registerContent& newValue = newVariableValues[oldVariable->first];
+        const registerContent newValue = at_StringRegistercontentMap(&newVariableValues,oldVariable->first)->second;
         if (oldVariable->second != newValue){
             printDifference(oldVariable->first, oldVariable->second, newValue);
         }
     }
+
+    destroy_StringRegistercontentMap(&newVariableValues);
 }
 
 //signals debuggee (who was waiting in step 3 of loadDebuggedProgram for setup to complete) to get started running
 void startDebuggeeRun(pid_t debuggee){
-    C_TRYCATCH(ptrace(PTRACE_CONT, debuggee, nullptr, nullptr));
+    C_TRYCATCH(ptrace(PTRACE_CONT, debuggee, NULL, NULL));
 }
 
 //manage debugging the code
@@ -325,12 +483,13 @@ void runDebugger(char *programArgs[], void *beginAddress, void *endAddress,
         struct StringRegistercontentMap storedVariables = storeVariables(variableMap, debuggee);
 
         stepPastBreakpoint(beginAddress, replacedBeginByte, debuggee);
-        C_TRYCATCH(ptrace(PTRACE_CONT, debuggee, nullptr, nullptr)); //resume run
+        C_TRYCATCH(ptrace(PTRACE_CONT, debuggee, NULL, NULL)); //resume run
 
         C_TRYCATCH(wait(&debuggeeStatus)); //wait for debuggee to reach end of inspected code
         if (WIFEXITED(debuggeeStatus)) break;
         stepPastBreakpoint(endAddress, replacedEndByte, debuggee);
         compareVariables(&storedVariables, variableMap, debuggee);
-        C_TRYCATCH(ptrace(PTRACE_CONT, debuggee, nullptr, nullptr)); //resume run
+        C_TRYCATCH(ptrace(PTRACE_CONT, debuggee, NULL, NULL)); //resume run
+        destroy_StringRegistercontentMap(&storedVariables);
     } while (true);
 }
