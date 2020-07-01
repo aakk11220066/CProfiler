@@ -67,6 +67,7 @@ void erase_StringRegistercontentMap(
 struct StringRegistercontentPair;
 struct StringRegistercontentPair create_StringRegistercontentPair(const char* key, const registerContent data);
 void destroy_StringRegistercontentPair(struct StringRegistercontentPair* target);
+void sort_StringRegistercontentPair(struct StringRegistercontentPair *head); //bubble sort
 
 //get input from user, return a mapping of (variable name, r name)
 struct StringStringMap getRegisterMap();
@@ -164,6 +165,22 @@ void destroy_StringRegistercontentPair(struct StringRegistercontentPair* target)
     if (!target) return;
     free((char*)(target->first));
     free(target);
+}
+void swapData_StringRegistercontentPair(struct StringRegistercontentPair* pair1, struct StringRegistercontentPair* pair2){
+    struct StringRegistercontentPair temp = *pair2;
+    pair2->first = pair1->first;
+    pair2->second = pair1->second;
+    pair1->first = temp.first;
+    pair1->second = temp.second;
+}
+void sort_StringRegistercontentPair(struct StringRegistercontentPair *head) { //bubble sort
+    if (!head) return;
+
+    sort_StringRegistercontentPair(head->_next);
+
+    for (; head->_next && strcmp(head->first, head->_next->first) > 0; head = head->_next) {
+        swapData_StringRegistercontentPair(head, head->_next);
+    }
 }
 
 #define MAP_CREATE(MAP_TYPE) do { \
@@ -286,15 +303,17 @@ int main(int argc, char* argv[]) {
 struct StringStringMap getRegisterMap(){
     char variable[MAX_VAR_NAME_LENGTH+1];
     char strRegister[WORD_PROFILE_LENGTH+1];
-    struct StringStringMap result;
+    struct StringStringMap result = create_StringStringMap();
 
     do{
         scanf("%s", variable);
         scanf("%s", strRegister);
+        if (!strcmp(variable,"run") && !strcmp(strRegister,"profile")) break;
+
         struct StringStringPair newMapping = create_StringStringPair(variable, strRegister);
         insert_StringStringMap(&result, &newMapping);
-    } while (strcmp(variable,"run") || strcmp(strRegister,"profile"));
-    erase_StringStringMap(&result, "run"); //alternatively, just erase front
+    } while (true);
+    //erase_StringStringMap(&result, "run"); //alternatively, just break after receipt of "run profile"
 
     return result;
 }
@@ -430,6 +449,7 @@ struct StringRegistercontentMap storeVariables(const struct StringStringMap* var
         insert_StringRegistercontentMap(&variableValues, &newVariableEntry);
     }
 
+    sort_StringRegistercontentPair(variableValues.mappings);
     return variableValues;
 }
 
