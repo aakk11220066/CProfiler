@@ -84,11 +84,12 @@ unsigned char insertByte(void *targetAddress, pid_t debuggee, unsigned char repl
 unsigned char insertBreakpoint(void* breakpointAddress, pid_t debuggee);
 
 //locally restore debuggee to natural state (without breakpoint)
+//returns the address of the breakpoint
 //1. restores overwritten byte to original placement
 //2. backs up rip by one instruction (one byte)
 //3. runs a single instruction of debuggee
 //4. replaces debug interrupt back into breakpointAddress
-void stepPastBreakpoint(void* breakpointAddress, unsigned char replacedByte, pid_t debuggee);
+void* stepPastBreakpoint(void* breakpointAddress, unsigned char replacedByte, pid_t debuggee);
 
 //1. places trace on self (with ptrace(PTRACE_TRACEME))
 //2. execute debuggee program
@@ -353,18 +354,19 @@ unsigned char insertBreakpoint(void *breakpointAddress, pid_t debuggee) {
 }
 
 //locally restore debuggee to natural state (without breakpoint)
+//returns the address of the breakpoint
 //1. restores overwritten byte to original placement
 //2. backs up rip by one instruction (one byte)
 //3. runs a single instruction of debuggee
 //4. replaces debug interrupt back into breakpointAddress
-void stepPastBreakpoint(void* breakpointAddress, unsigned char replacedByte, pid_t debuggee){
+void* stepPastBreakpoint(void* breakpointAddress, unsigned char replacedByte, pid_t debuggee){
     //1. restores overwritten byte to original placement
     insertByte(breakpointAddress, debuggee, replacedByte);
 
     //2. backs up rip by one instruction (one byte)
     struct user_regs_struct debuggeeRegisters;
     C_TRYCATCH(ptrace(PTRACE_GETREGS, debuggee, NULL, &debuggeeRegisters));
-    --debuggeeRegisters.rip;
+    void* result = (void*) --debuggeeRegisters.rip;
     C_TRYCATCH(ptrace(PTRACE_SETREGS, debuggee, NULL, &debuggeeRegisters));
 
     //3. runs a single instruction of debuggee
@@ -372,6 +374,8 @@ void stepPastBreakpoint(void* breakpointAddress, unsigned char replacedByte, pid
 
     //4. replaces debug interrupt back into breakpointAddress
     insertBreakpoint(breakpointAddress, debuggee);
+
+    return result;
 }
 
 //1. places trace on self (with ptrace(PTRACE_TRACEME))
@@ -503,11 +507,15 @@ void runDebugger(char *programArgs[], void *beginAddress, void *endAddress,
         struct StringRegistercontentMap storedVariables = storeVariables(variableMap, debuggee);
 
         stepPastBreakpoint(beginAddress, replacedBeginByte, debuggee);
-        C_TRYCATCH(ptrace(PTRACE_CONT, debuggee, NULL, NULL)); //resume run
+        void* currentDebuggeeInstructionAddress = NULL;
+        do {
+            C_TRYCATCH(ptrace(PTRACE_CONT, debuggee, NULL, NULL)); //resume run
 
-        C_TRYCATCH(wait(&debuggeeStatus)); //wait for debuggee to reach end of inspected code
+            C_TRYCATCH(wait(&debuggeeStatus)); //wait for debuggee to reach end of inspected code
+            if (WIFEXITED(debuggeeStatus)) break;
+            currentDebuggeeInstructionAddress = stepPastBreakpoint(endAddress, replacedEndByte, debuggee);
+        } while(currentDebuggeeInstructionAddress == beginAddress);
         if (WIFEXITED(debuggeeStatus)) break;
-        stepPastBreakpoint(endAddress, replacedEndByte, debuggee);
         compareVariables(&storedVariables, variableMap, debuggee);
         C_TRYCATCH(ptrace(PTRACE_CONT, debuggee, NULL, NULL)); //resume run
         destroy_StringRegistercontentMap(&storedVariables);
